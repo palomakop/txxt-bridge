@@ -2,7 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const tmp_dir = require('os').tmpdir();
 const path = require('path');
-var strftime = require('strftime');
+const strftime = require('strftime');
 const imgbbUploader = require("imgbb-uploader");
 const twilio = require("twilio");
 
@@ -46,9 +46,9 @@ exports.handler = async function(context, event, callback) {
 
   const messageSid = event.MessageSid;
 
-  var emoji = ["👾","🥬","❤️‍🔥","🧬","🪲","🌵","🌞","✨","🌈","💥","🪐","🌎","🌱","🍄","🦋","👁️","👽","🖖","🧠","🐸","🍄‍🟫","🐚","🪸","⚡️","☁️","🧊","🎲","⛵️","🏔️","🛖","🕋","💾","📺","📡","💡","💎","⛓️","🔭","🗝️","🪣"];
-  var emojo = emoji[Math.floor(Math.random()*emoji.length)];
-  var reply = new Twilio.twiml.MessagingResponse();
+  const emoji = ["👾","🥬","❤️‍🔥","🧬","🪲","🌵","🌞","✨","🌈","💥","🪐","🌎","🌱","🍄","🦋","👁️","👽","🖖","🧠","🐸","🍄‍🟫","🐚","🪸","⚡️","☁️","🧊","🎲","⛵️","🏔️","🛖","🕋","💾","📺","📡","💡","💎","⛓️","🔭","🗝️","🪣"];
+  let emojo = emoji[Math.floor(Math.random()*emoji.length)];
+  let reply = new Twilio.twiml.MessagingResponse();
   reply.message(emojo + " " + blogUrl);
 
   try {
@@ -64,14 +64,14 @@ exports.handler = async function(context, event, callback) {
 
         if (["jpeg","png","gif"].includes(mediaType)) {
 
-          var filename = todaysDate + "_" + makeid(10);
-          var objectKey = filename + "." + mediaType;
+          let filename = todaysDate + "_" + makeid(10);
+          let objectKey = filename + "." + mediaType;
           console.log(objectKey);
-          var filepath = path.join(tmp_dir, objectKey);
+          let filepath = path.join(tmp_dir, objectKey);
 
-          const writer = fs.createWriteStream(filepath);
+          let writer = fs.createWriteStream(filepath);
 
-          var imageRequest = await axios({
+          let imageRequest = await axios({
             method: 'get',
             url: mediaUrl,
             responseType: 'stream',
@@ -103,7 +103,7 @@ exports.handler = async function(context, event, callback) {
             console.log("File created in temporary directory: " + files.join(", "));
           });
 
-          var imageDelete = await client
+          let imageDelete = await client
             .messages(messageSid)
             .media(mediaSid)
             .remove();
