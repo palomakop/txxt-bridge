@@ -39,3 +39,7 @@ If you want to create your own SMS-powered microblog, read on below.
 ## Troubleshooting Tip
 
 In the Twilio function editor, there is a toggle labeled "Live logs off." If you switch it on, any `console.log()` messages in your code will appear live in the bottom panel, along with information about the function as it's triggered.
+
+## Updates
+
+The new version contains some hardcoded values (redacted) for to: and from: phone numbers for a notification to a moderator. I should have made these env variables. Will fix in a future update and also add more notes in the docs about the external function I made to delete posts for moderation purposes.
