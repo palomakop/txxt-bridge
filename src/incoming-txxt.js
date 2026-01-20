@@ -1,10 +1,10 @@
 const axios = require('axios');
-const fs = require('fs');
+const fs = require('fs').promises;
+const fsSync = require('fs');
 const tmp_dir = require('os').tmpdir();
 const path = require('path');
-const strftime = require('strftime');
-const imgbbUploader = require("imgbb-uploader");
 const twilio = require("twilio");
+const imgbbUploader = require("imgbb-uploader");
 
 function makeid(length) {
     let result = '';
@@ -18,13 +18,16 @@ function makeid(length) {
     return result;
 }
 
+function getTodaysDate() {
+  return new Date().toISOString().split('T')[0].replace(/-/g, '');
+}
+
 exports.handler = async function(context, event, callback) {
 
   const wfUser = context.WF_USER;
   const wfPass = context.WF_PASS;
   const wfHost = context.WF_HOST;
-
-  const blogUrl = context.BLOG_URL;
+  const deletePassword = context.DELETE_PASSWORD;
 
   const accountSid = context.ACCOUNT_SID;
   const authToken = context.AUTH_TOKEN;
@@ -32,7 +35,7 @@ exports.handler = async function(context, event, callback) {
 
   const imgbbKey = context.IMGBB_KEY;
 
-  const todaysDate = strftime('%Y%m%d');
+  const todaysDate = getTodaysDate();
   console.log(todaysDate);
 
   console.log("body: " + event.Body);
@@ -40,38 +43,38 @@ exports.handler = async function(context, event, callback) {
 
   let postItems = [];
 
-  if (event.Body != "") {
+  if (event.Body !== "") {
     postItems.push(event.Body);
   }
 
   const messageSid = event.MessageSid;
 
   const emoji = ["👾","🥬","❤️‍🔥","🧬","🪲","🌵","🌞","✨","🌈","💥","🪐","🌎","🌱","🍄","🦋","👁️","👽","🖖","🧠","🐸","🍄‍🟫","🐚","🪸","⚡️","☁️","🧊","🎲","⛵️","🏔️","🛖","🕋","💾","📺","📡","💡","💎","⛓️","🔭","🗝️","🪣"];
-  let emojo = emoji[Math.floor(Math.random()*emoji.length)];
-  let reply = new Twilio.twiml.MessagingResponse();
-  reply.message(emojo + " " + blogUrl);
+  const emojo = emoji[Math.floor(Math.random() * emoji.length)];
+  const reply = new Twilio.twiml.MessagingResponse();
+  reply.message(emojo + " https://txxt.club?t=" + makeid(6));
 
   try {
 
     if (event.NumMedia > 0) {
 
       for (let i = 0; i < event.NumMedia; i++) {
-        let mediaUrlKey = "MediaUrl" + i;
-        let mediaTypeKey = "MediaContentType" + i;
-        mediaUrl = event[mediaUrlKey];
-        mediaType = event[mediaTypeKey].split("/")[1];
-        mediaSid = mediaUrl.split("/").pop();
+        const mediaUrlKey = "MediaUrl" + i;
+        const mediaTypeKey = "MediaContentType" + i;
+        const mediaUrl = event[mediaUrlKey];
+        const mediaType = event[mediaTypeKey].split("/")[1];
+        const mediaSid = mediaUrl.split("/").pop();
 
         if (["jpeg","png","gif"].includes(mediaType)) {
 
-          let filename = todaysDate + "_" + makeid(10);
-          let objectKey = filename + "." + mediaType;
+          const filename = todaysDate + "_" + makeid(10);
+          const objectKey = filename + "." + mediaType;
           console.log(objectKey);
-          let filepath = path.join(tmp_dir, objectKey);
+          const filepath = path.join(tmp_dir, objectKey);
 
-          let writer = fs.createWriteStream(filepath);
+          const writer = fsSync.createWriteStream(filepath);
 
-          let imageRequest = await axios({
+          await axios({
             method: 'get',
             url: mediaUrl,
             responseType: 'stream',
@@ -97,100 +100,140 @@ exports.handler = async function(context, event, callback) {
             });
           });
 
-          // read the contents of the temporary directory to check that the file was created
-          fs.readdir(tmp_dir, function(err, files) {
-            if (err) callback(err);
-            console.log("File created in temporary directory: " + files.join(", "));
-          });
-
-          let imageDelete = await client
-            .messages(messageSid)
-            .media(mediaSid)
-            .remove();
-
-          console.log("media deleted from twilio: " + imageDelete);
-
-          imgbbHost = "https://api.imgbb.com/1/upload?key=" + imgbbKey + "&image=" + imageRequest.data;
-
-          let options = {
-            apiKey: imgbbKey, // MANDATORY
+          const options = {
+            apiKey: imgbbKey,
             name: filename,
             imagePath: filepath,
-            // base64string: base64Encode(imageRequest.data)
           };
 
           let imageUpload = await imgbbUploader(options)
             .catch(function (error) {
+              console.error('imgbb upload failed:', error);
               if (error.response) {
-                // The request was made and the server responded with a status code
-                // that falls out of the range of 2xx
                 console.log(error.response.data);
                 console.log(error.response.status);
                 console.log(error.response.headers);
               } else if (error.request) {
-                // The request was made but no response was received
-                // `error.request` is an instance of XMLHttpRequest in the browser 
-                // and an instance of http.ClientRequest in node.js
                 console.log(error.request);
               } else {
-                // Something happened in setting up the request that triggered an Error
                 console.log('Error', error.message);
               }
+              return null;
             });
 
-            // console.log(imageUpload);
+          // Check if upload was successful
+          if (!imageUpload || !imageUpload.url) {
+            console.warn('Image upload failed, skipping this image');
+            // Clean up temp file even on failure
+            try {
+              await fs.unlink(filepath);
+            } catch (cleanupError) {
+              console.warn('Failed to cleanup temp file:', cleanupError);
+            }
+            continue; // Skip this image and continue with next
+          }
 
-            imageMd = "![](" + imageUpload.url + ")";
+          // Upload successful, now we can add to post and clean up
+          const imageMd = "![](" + imageUpload.url + ")";
+          postItems.push(imageMd);
 
-            postItems.push(imageMd);
+          // Delete media from Twilio after successful upload
+          try {
+            const imageDelete = await client
+              .messages(messageSid)
+              .media(mediaSid)
+              .remove();
+            console.log("media deleted from twilio: " + imageDelete);
+          } catch (deleteError) {
+            console.warn("Failed to delete media from Twilio:", deleteError);
+            // Continue anyway - the upload succeeded
+          }
+
+          // Clean up temp file
+          try {
+            await fs.unlink(filepath);
+            console.log("Temp file cleaned up: " + filepath);
+          } catch (cleanupError) {
+            console.warn('Failed to cleanup temp file:', cleanupError);
+            // Not critical, continue
+          }
 
         }
       }
     }
 
-    // post to writeFreely
+    // Post to WriteFreely
+    try {
+      const wfAuth = await axios.post(wfHost + "/api/auth/login", {
+        alias: wfUser,
+        pass: wfPass
+      });
 
-    const wfAuth = await axios.post(wfHost + "/auth/login", {
-      alias: wfUser,
-      pass: wfPass
-    });
+      const wfToken = "Token " + wfAuth.data.data.access_token;
 
-    // console.log("auth: " + JSON.stringify(wfAuth.data));
+      const postBody = {
+        body: postItems.join("\n\n")
+      };
 
-    const wfToken = "Token " + wfAuth.data.data.access_token;
+      console.log(JSON.stringify(postBody));
 
-    const postBody = {
-      body: postItems.join("\n\n")
+      const wfPost = await axios.post(wfHost + "/api/collections/txxt/posts", postBody, {
+        headers: {
+          "Authorization": wfToken
+        }
+      });
+
+      console.log("post response: " + JSON.stringify(wfPost.data));
+
+      // Get post details for notification
+      const postSlug = wfPost.data.data.slug;
+      const postId = wfPost.data.data.id;
+      const postUrl = wfHost + "/" + postSlug;
+      const deleteUrl = `https://txxt-delete.val.run/?id=${postId}&password=${deletePassword}`;
+
+      // Send notification to your number
+      try {
+        await client.messages.create({
+          body: `${event.From} posted ${postUrl}\n\ndelete this: ${deleteUrl}`,
+          from: '+18888888888', // twilio number
+          to: '+18888888888' // notification recipient
+        });
+        console.log('Notification sent');
+      } catch (notifyError) {
+        console.warn('Failed to send notification:', notifyError);
+        // Don't fail the whole function if notification fails
+      }
+
+      const wfLogout = await axios.delete(wfHost + "/api/auth/me", {
+        headers: {
+          "Authorization": wfToken
+        }
+      });
+
+      console.log("logout: " + wfLogout.status);
+
+      // Only send success reply if everything worked
+      return callback(null, reply);
+
+    } catch (wfError) {
+      console.error('WriteFreely error:', wfError);
+      
+      // Send error message to user
+      const errorReply = new Twilio.twiml.MessagingResponse();
+      errorReply.message("💀 sorry it's an error");
+      return callback(null, errorReply);
     }
-
-    console.log(JSON.stringify(postBody));
-
-    const wfPost = await axios.post(wfHost + "/collections/txxt/posts", postBody, {
-      headers: {
-        "Authorization": wfToken
-      }
-    });
-
-    console.log("post response: " + wfPost.data);
-
-    const wfLogout = await axios.delete(wfHost + "/auth/me", {
-      headers: {
-        "Authorization": wfToken
-      }
-    });
-
-    console.log("logout: " + wfLogout.status);
-
-    return callback(null, reply);
 
   } catch (error) {
 
     // In the event of an error, return a 500 error and the error message
-
     console.error(error);
 
-    return callback(error, "If at first you don't succeed, try, try again.");
+    // Send error message to user for any other errors
+    const errorReply = new Twilio.twiml.MessagingResponse();
+    errorReply.message("💀 sorry it's an error");
+    return callback(null, errorReply);
 
   }
   
-}
+};
