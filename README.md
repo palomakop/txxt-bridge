@@ -2,7 +2,7 @@
 
 This is a node.js serverless function for the Twilio platform. It allows you to post to a WriteFreely blog by sending an SMS with text and/or images to a Twilio phone number. There is no authentication, so only share your Twilio phone number with people you want to give posting access to.
 
-I created this project as a fun thing for me and my friends. It is based on the idea (but not the code) of [snacksnacksnacksnacksnack](https://github.com/samn/snacks). (Except that project uses an email address, not a phone number, and doesn't support text, only images.) It also bears some similarity to the very first version of Twitter.
+I created this project as a fun thing for me and my friends. It is based on the idea (but not the code) of [snacksnacksnacksnacksnack](https://github.com/samn/snacks). (Except that project uses an email address, not a phone number, and doesn't support text, only images.) It also bears some similarity to the earliest version of Twitter.
 
 Our WriteFreely blog has custom css that hides most of the UI elements, creating a relatively context-free stream of posts. You can visit it at [txxt.club](https://txxt.club).
 
@@ -40,6 +40,6 @@ If you want to create your own SMS-powered microblog, read on below.
 
 In the Twilio function editor, there is a toggle labeled "Live logs off." If you switch it on, any `console.log()` messages in your code will appear live in the bottom panel, along with information about the function as it's triggered.
 
-## Updates
+## Notes on latest version
 
-The new version contains some hardcoded values (redacted) for to: and from: phone numbers for a notification to a moderator. I should have made these env variables. Will fix in a future update and also add more notes in the docs about the external function I made to delete posts for moderation purposes.
+In the latest version of this, I've added a weekly digest that sends out to a list managed by val.town, as well as a text message that goes to a specific moderator's number whenever a new post is created. I haven't fully documented these or added the code from the extra functions to this repo. If you want more info, get in touch via [my website](https://palomakop.tv).

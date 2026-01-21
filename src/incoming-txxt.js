@@ -28,6 +28,10 @@ exports.handler = async function(context, event, callback) {
   const wfPass = context.WF_PASS;
   const wfHost = context.WF_HOST;
   const deletePassword = context.DELETE_PASSWORD;
+  const listValUrl = context.LIST_VAL_URL;
+  const deleteValUrl = context.DELETE_VAL_URL;
+  const twilioPhoneNumber = context.TWILIO_PHONE_NUMBER;
+  const moderatorPhoneNumber = context.MODERATOR_PHONE_NUMBER;
 
   const accountSid = context.ACCOUNT_SID;
   const authToken = context.AUTH_TOKEN;
@@ -38,9 +42,58 @@ exports.handler = async function(context, event, callback) {
   const todaysDate = getTodaysDate();
   console.log(todaysDate);
 
+  const messageText = event.Body.trim().toLowerCase();
   console.log("body: " + event.Body);
   console.log("numMedia: " + event.NumMedia);
 
+  // List of reserved commands that should not be posted to blog
+  const reservedCommands = [
+    'subscribe', 
+    'unsubscribe', 
+    'cancel', 
+    'end', 
+    'optout', 
+    'quit', 
+    'revoke', 
+    'stop', 
+    'stopal', 
+    'info', 
+    'help'
+  ];
+
+  // Check if message is a reserved command (case insensitive)
+  if (reservedCommands.includes(messageText)) {
+    console.log('Reserved command detected:', messageText);
+    
+    // Only handle subscribe/unsubscribe via val.town
+    if (messageText === 'subscribe' || messageText === 'unsubscribe') {
+      try {
+        // Forward to val.town for list management
+        const valResponse = await axios.post(listValUrl, new URLSearchParams({
+          From: event.From,
+          Body: event.Body
+        }), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        });
+        
+        // Val returns TwiML, parse and send back
+        const valTwiml = valResponse.data;
+        return callback(null, valTwiml);
+        
+      } catch (valError) {
+        console.error('Val.town error:', valError);
+        const errorReply = new Twilio.twiml.MessagingResponse();
+        errorReply.message("💀 sorry it's an error");
+        return callback(null, errorReply);
+      }
+    } else {
+      // For other reserved commands, let Twilio handle them natively
+      // Just return empty response
+      return callback(null, new Twilio.twiml.MessagingResponse());
+    }
+  }
+
+  // Continue with normal blog posting for non-reserved messages
   let postItems = [];
 
   if (event.Body !== "") {
@@ -51,8 +104,6 @@ exports.handler = async function(context, event, callback) {
 
   const emoji = ["👾","🥬","❤️‍🔥","🧬","🪲","🌵","🌞","✨","🌈","💥","🪐","🌎","🌱","🍄","🦋","👁️","👽","🖖","🧠","🐸","🍄‍🟫","🐚","🪸","⚡️","☁️","🧊","🎲","⛵️","🏔️","🛖","🕋","💾","📺","📡","💡","💎","⛓️","🔭","🗝️","🪣"];
   const emojo = emoji[Math.floor(Math.random() * emoji.length)];
-  const reply = new Twilio.twiml.MessagingResponse();
-  reply.message(emojo + " https://txxt.club?t=" + makeid(6));
 
   try {
 
@@ -189,14 +240,14 @@ exports.handler = async function(context, event, callback) {
       const postSlug = wfPost.data.data.slug;
       const postId = wfPost.data.data.id;
       const postUrl = wfHost + "/" + postSlug;
-      const deleteUrl = `https://txxt-delete.val.run/?id=${postId}&password=${deletePassword}`;
+      const deleteUrl = `${deleteValUrl}?id=${postId}&password=${deletePassword}`;
 
-      // Send notification to your number
+      // Send notification to moderator
       try {
         await client.messages.create({
           body: `${event.From} posted ${postUrl}\n\ndelete this: ${deleteUrl}`,
-          from: '+18888888888', // twilio number
-          to: '+18888888888' // notification recipient
+          from: twilioPhoneNumber,
+          to: moderatorPhoneNumber
         });
         console.log('Notification sent');
       } catch (notifyError) {
@@ -212,7 +263,23 @@ exports.handler = async function(context, event, callback) {
 
       console.log("logout: " + wfLogout.status);
 
-      // Only send success reply if everything worked
+      // Check if user is subscribed for customized reply
+      let isSubscribed = false;
+      try {
+        const checkSubResponse = await axios.get(listValUrl + '/check?phone=' + encodeURIComponent(event.From));
+        isSubscribed = checkSubResponse.data.subscribed;
+      } catch (checkError) {
+        console.warn('Failed to check subscription status:', checkError);
+      }
+
+      // Send customized success reply
+      const reply = new Twilio.twiml.MessagingResponse();
+      if (isSubscribed) {
+        reply.message(emojo + " https://txxt.club?t=" + makeid(6));
+      } else {
+        reply.message(emojo + " https://txxt.club?t=" + makeid(6) + "\n\ntext SUBSCRIBE for a weekly digest");
+      }
+
       return callback(null, reply);
 
     } catch (wfError) {
