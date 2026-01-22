@@ -4,7 +4,7 @@ const fsSync = require('fs');
 const tmp_dir = require('os').tmpdir();
 const path = require('path');
 const twilio = require("twilio");
-const imgbbUploader = require("imgbb-uploader");
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
 function makeid(length) {
     let result = '';
@@ -37,7 +37,18 @@ exports.handler = async function(context, event, callback) {
   const authToken = context.AUTH_TOKEN;
   const client = twilio(accountSid, authToken);
 
-  const imgbbKey = context.IMGBB_KEY;
+  const s3Bucket = context.S3_BUCKET_NAME;
+  const s3Region = context.S3_REGION;
+  const awsAccessKeyId = context.AWS_ACCESS_KEY_ID;
+  const awsSecretAccessKey = context.AWS_SECRET_ACCESS_KEY;
+
+  const s3Client = new S3Client({
+    region: s3Region,
+    credentials: {
+      accessKeyId: awsAccessKeyId,
+      secretAccessKey: awsSecretAccessKey
+    }
+  });
 
   const todaysDate = getTodaysDate();
   console.log(todaysDate);
@@ -151,29 +162,41 @@ exports.handler = async function(context, event, callback) {
             });
           });
 
-          const options = {
-            apiKey: imgbbKey,
-            name: filename,
-            imagePath: filepath,
-          };
+          // Upload to S3
+          let imageUrl = null;
+          try {
+            const fileBuffer = await fs.readFile(filepath);
 
-          let imageUpload = await imgbbUploader(options)
-            .catch(function (error) {
-              console.error('imgbb upload failed:', error);
-              if (error.response) {
-                console.log(error.response.data);
-                console.log(error.response.status);
-                console.log(error.response.headers);
-              } else if (error.request) {
-                console.log(error.request);
-              } else {
-                console.log('Error', error.message);
-              }
-              return null;
-            });
+            const uploadParams = {
+              Bucket: s3Bucket,
+              Key: objectKey,
+              Body: fileBuffer,
+              ContentType: `image/${mediaType}`
+            };
+
+            const command = new PutObjectCommand(uploadParams);
+            await s3Client.send(command);
+
+            // Construct the public URL
+            imageUrl = `https://${s3Bucket}.s3.${s3Region}.amazonaws.com/${objectKey}`;
+            console.log('S3 upload successful:', imageUrl);
+
+          } catch (error) {
+            console.error('S3 upload failed:', error);
+            if (error.$metadata) {
+              console.log('Error metadata:', error.$metadata);
+            }
+            // Clean up temp file even on failure
+            try {
+              await fs.unlink(filepath);
+            } catch (cleanupError) {
+              console.warn('Failed to cleanup temp file:', cleanupError);
+            }
+            continue; // Skip this image and continue with next
+          }
 
           // Check if upload was successful
-          if (!imageUpload || !imageUpload.url) {
+          if (!imageUrl) {
             console.warn('Image upload failed, skipping this image');
             // Clean up temp file even on failure
             try {
@@ -185,7 +208,7 @@ exports.handler = async function(context, event, callback) {
           }
 
           // Upload successful, now we can add to post and clean up
-          const imageMd = "![](" + imageUpload.url + ")";
+          const imageMd = "![](" + imageUrl + ")";
           postItems.push(imageMd);
 
           // Delete media from Twilio after successful upload
@@ -275,9 +298,9 @@ exports.handler = async function(context, event, callback) {
       // Send customized success reply
       const reply = new Twilio.twiml.MessagingResponse();
       if (isSubscribed) {
-        reply.message(emojo + " https://txxt.club?t=" + makeid(6));
+        reply.message(emojo + " " + wfHost + "?t=" + makeid(6) + "\n\nyou are subscribed to the weekly digest");
       } else {
-        reply.message(emojo + " https://txxt.club?t=" + makeid(6) + "\n\ntext SUBSCRIBE for a weekly digest");
+        reply.message(emojo + " " + wfHost + "?t=" + makeid(6) + "\n\ntext SUBSCRIBE for a weekly digest");
       }
 
       return callback(null, reply);
