@@ -308,6 +308,11 @@ exports.handler = async function(context, event, callback) {
         pass: wfPass
       });
 
+      // Validate login response
+      if (!wfAuth.data || !wfAuth.data.data || !wfAuth.data.data.access_token) {
+        throw new Error(`WriteFreely login failed: ${JSON.stringify(wfAuth.data || 'No response data')}`);
+      }
+
       const wfToken = "Token " + wfAuth.data.data.access_token;
 
       const postBody = {
