@@ -22,6 +22,54 @@ function getTodaysDate() {
   return new Date().toISOString().split('T')[0].replace(/-/g, '');
 }
 
+async function sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, errorLocation, error, context = {}) {
+  try {
+    let errorMessage = `ERROR in ${errorLocation}\n\n`;
+
+    // Add error details
+    if (error.message) {
+      errorMessage += `Message: ${error.message}\n\n`;
+    }
+
+    // Add error response data if available (for API errors)
+    if (error.response) {
+      errorMessage += `Status: ${error.response.status}\n`;
+      if (error.response.data) {
+        errorMessage += `Response: ${JSON.stringify(error.response.data).substring(0, 200)}\n\n`;
+      }
+    }
+
+    // Add stack trace (first 3 lines)
+    if (error.stack) {
+      const stackLines = error.stack.split('\n').slice(0, 3).join('\n');
+      errorMessage += `Stack: ${stackLines}\n\n`;
+    }
+
+    // Add context
+    if (Object.keys(context).length > 0) {
+      errorMessage += `Context:\n`;
+      for (const [key, value] of Object.entries(context)) {
+        errorMessage += `${key}: ${value}\n`;
+      }
+    }
+
+    // Truncate if too long (SMS limit is 1600 chars)
+    if (errorMessage.length > 1500) {
+      errorMessage = errorMessage.substring(0, 1500) + '...[truncated]';
+    }
+
+    await client.messages.create({
+      body: errorMessage,
+      from: twilioPhoneNumber,
+      to: moderatorPhoneNumber
+    });
+
+    console.log('Error notification sent to moderator');
+  } catch (notifyError) {
+    console.error('Failed to send error notification to moderator:', notifyError);
+  }
+}
+
 exports.handler = async function(context, event, callback) {
 
   const wfUser = context.WF_USER;
@@ -93,6 +141,14 @@ exports.handler = async function(context, event, callback) {
         
       } catch (valError) {
         console.error('Val.town error:', valError);
+
+        // Send detailed error to moderator
+        await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'Val.town list management', valError, {
+          'From': event.From,
+          'Body': event.Body,
+          'Command': messageText
+        });
+
         const errorReply = new Twilio.twiml.MessagingResponse();
         errorReply.message("💀 sorry it's an error");
         return callback(null, errorReply);
@@ -186,6 +242,15 @@ exports.handler = async function(context, event, callback) {
             if (error.$metadata) {
               console.log('Error metadata:', error.$metadata);
             }
+
+            // Send detailed error to moderator
+            await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'S3 image upload', error, {
+              'From': event.From,
+              'Filename': objectKey,
+              'MediaType': mediaType,
+              'Metadata': error.$metadata ? JSON.stringify(error.$metadata) : 'N/A'
+            });
+
             // Clean up temp file even on failure
             try {
               await fs.unlink(filepath);
@@ -307,7 +372,14 @@ exports.handler = async function(context, event, callback) {
 
     } catch (wfError) {
       console.error('WriteFreely error:', wfError);
-      
+
+      // Send detailed error to moderator
+      await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'WriteFreely posting', wfError, {
+        'From': event.From,
+        'PostItemsCount': postItems.length,
+        'HasImages': event.NumMedia > 0 ? 'Yes' : 'No'
+      });
+
       // Send error message to user
       const errorReply = new Twilio.twiml.MessagingResponse();
       errorReply.message("💀 sorry it's an error");
@@ -318,6 +390,13 @@ exports.handler = async function(context, event, callback) {
 
     // In the event of an error, return a 500 error and the error message
     console.error(error);
+
+    // Send detailed error to moderator
+    await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'General handler', error, {
+      'From': event.From,
+      'Body': event.Body ? event.Body.substring(0, 100) : 'N/A',
+      'NumMedia': event.NumMedia
+    });
 
     // Send error message to user for any other errors
     const errorReply = new Twilio.twiml.MessagingResponse();
