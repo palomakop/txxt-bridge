@@ -72,6 +72,8 @@ async function sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNum
 
 exports.handler = async function(context, event, callback) {
 
+  const startTime = Date.now(); // Track function start time
+
   const wfUser = context.WF_USER;
   const wfPass = context.WF_PASS;
   const wfHost = context.WF_HOST;
@@ -302,30 +304,55 @@ exports.handler = async function(context, event, callback) {
     }
 
     // Post to WriteFreely
+    let wfAttemptNumber = 0;
     try {
-      const wfAuth = await axios.post(wfHost + "/api/auth/login", {
-        alias: wfUser,
-        pass: wfPass
-      });
+      // Helper function to login and get token
+      const getAuthToken = async () => {
+        const wfAuth = await axios.post(wfHost + "/api/auth/login", {
+          alias: wfUser,
+          pass: wfPass
+        });
 
-      // Validate login response
-      if (!wfAuth.data || !wfAuth.data.data || !wfAuth.data.data.access_token) {
-        throw new Error(`WriteFreely login failed: ${JSON.stringify(wfAuth.data || 'No response data')}`);
-      }
+        // Validate login response
+        if (!wfAuth.data || !wfAuth.data.data || !wfAuth.data.data.access_token) {
+          throw new Error(`WriteFreely login failed: ${JSON.stringify(wfAuth.data || 'No response data')}`);
+        }
 
-      const wfToken = "Token " + wfAuth.data.data.access_token;
-
-      const postBody = {
-        body: postItems.join("\n\n")
+        return "Token " + wfAuth.data.data.access_token;
       };
 
-      console.log(JSON.stringify(postBody));
+      // Helper function to post with retry logic
+      const postWithRetry = async (token, maxRetries = 1) => {
+        wfAttemptNumber++;
+        const postBody = {
+          body: postItems.join("\n\n")
+        };
 
-      const wfPost = await axios.post(wfHost + "/api/collections/txxt/posts", postBody, {
-        headers: {
-          "Authorization": wfToken
+        console.log(JSON.stringify(postBody));
+
+        try {
+          const wfPost = await axios.post(wfHost + "/api/collections/txxt/posts", postBody, {
+            headers: {
+              "Authorization": token
+            }
+          });
+          return wfPost;
+        } catch (postError) {
+          // If we get a 401 and have retries left, re-authenticate and try again
+          if (postError.response && postError.response.status === 401 && maxRetries > 0) {
+            console.log('Got 401, re-authenticating and retrying...');
+            const newToken = await getAuthToken();
+            return postWithRetry(newToken, maxRetries - 1);
+          }
+          throw postError;
         }
-      });
+      };
+
+      // Get initial token
+      const wfToken = await getAuthToken();
+
+      // Post with retry logic
+      const wfPost = await postWithRetry(wfToken);
 
       console.log("post response: " + JSON.stringify(wfPost.data));
 
@@ -368,7 +395,7 @@ exports.handler = async function(context, event, callback) {
       // Send customized success reply
       const reply = new Twilio.twiml.MessagingResponse();
       if (isSubscribed) {
-        reply.message(emojo + " " + wfHost + "?t=" + makeid(6) + "\n\nyou are subscribed to the weekly digest");
+        reply.message(emojo + " " + wfHost + "?t=" + makeid(6));
       } else {
         reply.message(emojo + " " + wfHost + "?t=" + makeid(6) + "\n\ntext SUBSCRIBE for a weekly digest");
       }
@@ -378,11 +405,15 @@ exports.handler = async function(context, event, callback) {
     } catch (wfError) {
       console.error('WriteFreely error:', wfError);
 
+      const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
+
       // Send detailed error to moderator
       await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'WriteFreely posting', wfError, {
         'From': event.From,
         'PostItemsCount': postItems.length,
-        'HasImages': event.NumMedia > 0 ? 'Yes' : 'No'
+        'HasImages': event.NumMedia > 0 ? 'Yes' : 'No',
+        'AttemptNumber': wfAttemptNumber,
+        'ElapsedTime': `${elapsedSeconds}s`
       });
 
       // Send error message to user
@@ -396,11 +427,14 @@ exports.handler = async function(context, event, callback) {
     // In the event of an error, return a 500 error and the error message
     console.error(error);
 
+    const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
+
     // Send detailed error to moderator
     await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'General handler', error, {
       'From': event.From,
       'Body': event.Body ? event.Body.substring(0, 100) : 'N/A',
-      'NumMedia': event.NumMedia
+      'NumMedia': event.NumMedia,
+      'ElapsedTime': `${elapsedSeconds}s`
     });
 
     // Send error message to user for any other errors
