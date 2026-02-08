@@ -182,8 +182,16 @@ exports.handler = async function(context, event, callback) {
         const mediaUrlKey = "MediaUrl" + i;
         const mediaTypeKey = "MediaContentType" + i;
         const mediaUrl = event[mediaUrlKey];
-        const mediaType = event[mediaTypeKey].split("/")[1];
+        const fullMediaType = event[mediaTypeKey];
+        const mediaType = fullMediaType.split("/")[1];
         const mediaSid = mediaUrl.split("/").pop();
+
+        // Check if it's a video
+        if (fullMediaType.startsWith("video/")) {
+          const reply = new Twilio.twiml.MessagingResponse();
+          reply.message("sorry videos don't work T_T\n\nsend an image?");
+          return callback(null, reply);
+        }
 
         if (["jpeg","png","gif"].includes(mediaType)) {
 
