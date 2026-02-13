@@ -347,7 +347,10 @@ exports.handler = async function(context, event, callback) {
           return wfPost;
         } catch (postError) {
           // If we get a 401 and have retries left, re-authenticate and try again
-          if (postError.response && postError.response.status === 401 && maxRetries > 0) {
+          if (postError.response && (
+            postError.response.status === 401 ||
+            (postError.response.status === 404 && postError.response.data?.error_msg?.includes('Token'))
+          ) && maxRetries > 0) {
             console.log('Got 401, re-authenticating and retrying...');
             const newToken = await getAuthToken();
             return postWithRetry(newToken, maxRetries - 1);
