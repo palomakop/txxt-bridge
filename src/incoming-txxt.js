@@ -346,12 +346,15 @@ exports.handler = async function(context, event, callback) {
           });
           return wfPost;
         } catch (postError) {
+          // Add context to error so we know where it came from
+          postError.errorSource = 'POST_CREATE';
+
           // If we get a 401 and have retries left, re-authenticate and try again
           if (postError.response && (
             postError.response.status === 401 ||
             (postError.response.status === 404 && postError.response.data?.error_msg?.includes('Token'))
           ) && maxRetries > 0) {
-            console.log('Got 401, re-authenticating and retrying...');
+            console.log('Got 401/404 token error on POST, re-authenticating and retrying...');
             const newToken = await getAuthToken();
             return postWithRetry(newToken, maxRetries - 1);
           }
@@ -386,13 +389,18 @@ exports.handler = async function(context, event, callback) {
         // Don't fail the whole function if notification fails
       }
 
-      const wfLogout = await axios.delete(wfHost + "/api/auth/me", {
-        headers: {
-          "Authorization": wfToken
-        }
-      });
-
-      console.log("logout: " + wfLogout.status);
+      // Logout (non-critical - don't fail if this errors)
+      try {
+        const wfLogout = await axios.delete(wfHost + "/api/auth/me", {
+          headers: {
+            "Authorization": wfToken
+          }
+        });
+        console.log("logout: " + wfLogout.status);
+      } catch (logoutError) {
+        console.warn("Logout failed (non-critical):", logoutError.message);
+        // Don't fail the whole function - post already succeeded
+      }
 
       // Check if user is subscribed for customized reply
       let isSubscribed = false;
@@ -424,6 +432,7 @@ exports.handler = async function(context, event, callback) {
         'PostItemsCount': postItems.length,
         'HasImages': event.NumMedia > 0 ? 'Yes' : 'No',
         'AttemptNumber': wfAttemptNumber,
+        'ErrorSource': wfError.errorSource || 'UNKNOWN',
         'ElapsedTime': `${elapsedSeconds}s`
       });
 
