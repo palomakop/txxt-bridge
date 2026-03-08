@@ -100,6 +100,8 @@ exports.handler = async function(context, event, callback) {
     }
   });
 
+  const errorMessage = "💀 sorry it's an error\n\npls try again";
+
   const todaysDate = getTodaysDate();
   console.log(todaysDate);
 
@@ -152,7 +154,7 @@ exports.handler = async function(context, event, callback) {
         });
 
         const errorReply = new Twilio.twiml.MessagingResponse();
-        errorReply.message("💀 sorry it's an error");
+        errorReply.message(errorMessage);
         return callback(null, errorReply);
       }
     } else {
@@ -315,22 +317,36 @@ exports.handler = async function(context, event, callback) {
     let wfAttemptNumber = 0;
     try {
       // Helper function to login and get token
-      const getAuthToken = async () => {
-        const wfAuth = await axios.post(wfHost + "/api/auth/login", {
-          alias: wfUser,
-          pass: wfPass
-        });
+      const getAuthToken = async (rateLimitRetries = 1) => {
+        try {
+          const wfAuth = await axios.post(wfHost + "/api/auth/login", {
+            alias: wfUser,
+            pass: wfPass
+          });
 
-        // Validate login response
-        if (!wfAuth.data || !wfAuth.data.data || !wfAuth.data.data.access_token) {
-          throw new Error(`WriteFreely login failed: ${JSON.stringify(wfAuth.data || 'No response data')}`);
+          // Validate login response
+          if (!wfAuth.data || !wfAuth.data.data || !wfAuth.data.data.access_token) {
+            throw new Error(`WriteFreely login failed: ${JSON.stringify(wfAuth.data || 'No response data')}`);
+          }
+
+          return "Token " + wfAuth.data.data.access_token;
+        } catch (authError) {
+          // Tag error source for better diagnostics
+          authError.errorSource = 'AUTH_LOGIN';
+
+          // If we get a 429 rate limit and have retries left, wait and try again
+          if (authError.response && authError.response.status === 429 && rateLimitRetries > 0) {
+            console.log('Got 429 rate limit on auth, waiting 2 seconds before retry...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return getAuthToken(rateLimitRetries - 1);
+          }
+
+          throw authError;
         }
-
-        return "Token " + wfAuth.data.data.access_token;
       };
 
       // Helper function to post with retry logic
-      const postWithRetry = async (token, maxRetries = 1) => {
+      const postWithRetry = async (token, maxRetries = 1, rateLimitRetries = 1) => {
         wfAttemptNumber++;
         const postBody = {
           body: postItems.join("\n\n")
@@ -349,6 +365,13 @@ exports.handler = async function(context, event, callback) {
           // Add context to error so we know where it came from
           postError.errorSource = 'POST_CREATE';
 
+          // If we get a 429 rate limit and have retries left, wait and try again
+          if (postError.response && postError.response.status === 429 && rateLimitRetries > 0) {
+            console.log('Got 429 rate limit, waiting 2 seconds before retry...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return postWithRetry(token, maxRetries, rateLimitRetries - 1);
+          }
+
           // If we get a 401 and have retries left, re-authenticate and try again
           if (postError.response && (
             postError.response.status === 401 ||
@@ -356,7 +379,7 @@ exports.handler = async function(context, event, callback) {
           ) && maxRetries > 0) {
             console.log('Got 401/404 token error on POST, re-authenticating and retrying...');
             const newToken = await getAuthToken();
-            return postWithRetry(newToken, maxRetries - 1);
+            return postWithRetry(newToken, maxRetries - 1, rateLimitRetries);
           }
           throw postError;
         }
@@ -438,7 +461,7 @@ exports.handler = async function(context, event, callback) {
 
       // Send error message to user
       const errorReply = new Twilio.twiml.MessagingResponse();
-      errorReply.message("💀 sorry it's an error");
+      errorReply.message(errorMessage);
       return callback(null, errorReply);
     }
 
@@ -459,7 +482,7 @@ exports.handler = async function(context, event, callback) {
 
     // Send error message to user for any other errors
     const errorReply = new Twilio.twiml.MessagingResponse();
-    errorReply.message("💀 sorry it's an error");
+    errorReply.message(errorMessage);
     return callback(null, errorReply);
 
   }
