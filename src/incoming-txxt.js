@@ -315,9 +315,16 @@ exports.handler = async function(context, event, callback) {
 
     // Post to WriteFreely
     let wfAttemptNumber = 0;
+    let authAttemptCount = 0;
     try {
       // Helper function to login and get token
-      const getAuthToken = async (rateLimitRetries = 1) => {
+      const getAuthToken = async (rateLimitRetries = 1, initialAttempt = true) => {
+        if (initialAttempt) {
+          authAttemptCount = 1;
+        } else {
+          authAttemptCount++;
+        }
+
         try {
           const wfAuth = await axios.post(wfHost + "/api/auth/login", {
             alias: wfUser,
@@ -331,14 +338,16 @@ exports.handler = async function(context, event, callback) {
 
           return "Token " + wfAuth.data.data.access_token;
         } catch (authError) {
-          // Tag error source for better diagnostics
+          // Tag error source and attempt info for better diagnostics
           authError.errorSource = 'AUTH_LOGIN';
+          authError.authAttemptCount = authAttemptCount;
+          authError.rateLimitRetriesLeft = rateLimitRetries;
 
           // If we get a 429 rate limit and have retries left, wait and try again
           if (authError.response && authError.response.status === 429 && rateLimitRetries > 0) {
-            console.log('Got 429 rate limit on auth, waiting 2 seconds before retry...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            return getAuthToken(rateLimitRetries - 1);
+            console.log(`Got 429 rate limit on auth (attempt ${authAttemptCount}), waiting 3.5 seconds before retry...`);
+            await new Promise(resolve => setTimeout(resolve, 3500));
+            return getAuthToken(rateLimitRetries - 1, false);
           }
 
           throw authError;
@@ -364,11 +373,12 @@ exports.handler = async function(context, event, callback) {
         } catch (postError) {
           // Add context to error so we know where it came from
           postError.errorSource = 'POST_CREATE';
+          postError.rateLimitRetriesLeft = rateLimitRetries;
 
           // If we get a 429 rate limit and have retries left, wait and try again
           if (postError.response && postError.response.status === 429 && rateLimitRetries > 0) {
-            console.log('Got 429 rate limit, waiting 2 seconds before retry...');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            console.log(`Got 429 rate limit on POST (attempt ${wfAttemptNumber}), waiting 3.5 seconds before retry...`);
+            await new Promise(resolve => setTimeout(resolve, 3500));
             return postWithRetry(token, maxRetries, rateLimitRetries - 1);
           }
 
@@ -377,8 +387,9 @@ exports.handler = async function(context, event, callback) {
             postError.response.status === 401 ||
             (postError.response.status === 404 && postError.response.data?.error_msg?.includes('Token'))
           ) && maxRetries > 0) {
-            console.log('Got 401/404 token error on POST, re-authenticating and retrying...');
-            const newToken = await getAuthToken();
+            console.log('Got 401/404 token error on POST, waiting 3.5 seconds before re-authenticating...');
+            await new Promise(resolve => setTimeout(resolve, 3500));
+            const newToken = await getAuthToken(0, false);
             return postWithRetry(newToken, maxRetries - 1, rateLimitRetries);
           }
           throw postError;
@@ -449,15 +460,24 @@ exports.handler = async function(context, event, callback) {
 
       const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(1);
 
-      // Send detailed error to moderator
-      await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'WriteFreely posting', wfError, {
+      // Build error context
+      const errorContext = {
         'From': event.From,
         'PostItemsCount': postItems.length,
         'HasImages': event.NumMedia > 0 ? 'Yes' : 'No',
-        'AttemptNumber': wfAttemptNumber,
+        'PostAttempts': wfAttemptNumber,
+        'AuthAttempts': authAttemptCount,
         'ErrorSource': wfError.errorSource || 'UNKNOWN',
         'ElapsedTime': `${elapsedSeconds}s`
-      });
+      };
+
+      // Add retry info if available (for 429 errors)
+      if (wfError.rateLimitRetriesLeft !== undefined) {
+        errorContext['RetriesLeft'] = wfError.rateLimitRetriesLeft;
+      }
+
+      // Send detailed error to moderator
+      await sendErrorToModerator(client, twilioPhoneNumber, moderatorPhoneNumber, 'WriteFreely posting', wfError, errorContext);
 
       // Send error message to user
       const errorReply = new Twilio.twiml.MessagingResponse();
